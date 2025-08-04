@@ -3,7 +3,8 @@ name: Build and Push Docker image
 on:
   push:
     branches:
-      - main
+      - production
+      - staging
 
 jobs:
   build-and-push:
@@ -19,9 +20,21 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Set Docker tag based on branch
+        id: vars
+        run: |
+          if [[ "${{ github.ref_name }}" == "production" ]]; then
+            echo "TAG=production" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref_name }}" == "staging" ]]; then
+            echo "TAG=staging" >> $GITHUB_OUTPUT
+          else
+            echo "Unsupported branch"
+            exit 1
+          fi
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
           context: .
           push: true
-          tags: tjcbento/penalty-backend:latest
+          tags: tjcbento/penalty-backend:${{ steps.vars.outputs.TAG }}
