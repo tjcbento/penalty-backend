@@ -2,9 +2,8 @@ import express from "express";
 import cors from "cors";
 import pg from "pg";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { config } from "./config.js";
-import { authenticateToken } from "./authenticate.js";
+import { authenticateToken, generateToken } from "./authenticate.js"; // Updated import
 
 const pool = new pg.Pool({
   user: config.PG_USER,
@@ -37,7 +36,7 @@ app.post("/login", async (req, res) => {
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) return res.status(401).json({ error: "Invalid credentials" });
 
-    const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: "1h" });
+    const token = generateToken({ username });
 
     res.json({ token, username });
   } catch (err) {
@@ -118,6 +117,136 @@ app.post("/submitbet", authenticateToken, async (req, res) => {
   }
 });
 
+app.get("/submitnotificationbet", async (req, res) => {
+  const token = req.query.token;
+
+  const renderPage = (title, message, color = "#333") => `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>${title}</title>
+      <style>
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+            Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+          background: #f9fafb;
+          color: ${color};
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          height: 100vh;
+          margin: 0;
+          padding: 1rem;
+        }
+        .container {
+          background: white;
+          padding: 2rem 3rem;
+          border-radius: 12px;
+          box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+          max-width: 400px;
+          text-align: center;
+        }
+        h1 {
+          margin-bottom: 0.5rem;
+          font-weight: 600;
+          font-size: 1.8rem;
+        }
+        p {
+          font-size: 1.1rem;
+          margin-top: 0;
+          line-height: 1.4;
+          color: #555;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>${title}</h1>
+        <p>${message}</p>
+      </div>
+    </body>
+    </html>
+  `;
+
+  if (!token) {
+    return res
+      .status(400)
+      .send(renderPage("Error", "Missing token in the URL.", "#e53e3e"));
+  }
+
+  try {
+    const tokenResult = await pool.query(
+      `SELECT username, id_fixture, bet FROM notification_tokens WHERE token = $1`,
+      [token]
+    );
+
+    if (tokenResult.rows.length === 0) {
+      return res
+        .status(404)
+        .send(renderPage("Error", "Invalid or expired token.", "#e53e3e"));
+    }
+
+    const { username, id_fixture, bet } = tokenResult.rows[0];
+
+    const matchResult = await pool.query(
+      `SELECT date FROM matches WHERE id_fixture = $1`,
+      [id_fixture]
+    );
+
+    if (matchResult.rows.length === 0) {
+      return res
+        .status(404)
+        .send(renderPage("Error", "Match not found.", "#e53e3e"));
+    }
+
+    const matchDate = new Date(matchResult.rows[0].date);
+    const now = new Date();
+
+    if (matchDate <= now) {
+      return res
+        .status(403)
+        .send(
+          renderPage(
+            "Error",
+            "Cannot bet on a match already underway.",
+            "#e53e3e"
+          )
+        );
+    }
+
+    await pool.query(
+      `
+      INSERT INTO bets (username, id_fixture, bet)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (username, id_fixture) DO UPDATE
+      SET bet = EXCLUDED.bet
+      `,
+      [username, id_fixture, bet]
+    );
+
+    res.send(
+      renderPage(
+        "Bet Submitted!",
+        "Thank you, your bet has been successfully submitted.",
+        "#38a169"
+      )
+    );
+  } catch (err) {
+    console.error("Submit notification bet error:", err);
+    res
+      .status(500)
+      .send(
+        renderPage(
+          "Server Error",
+          "Something went wrong, please try again later.",
+          "#e53e3e"
+        )
+      );
+  }
+});
+
 app.get("/nextmatches", authenticateToken, async (req, res) => {
   try {
     const username = req.user.username; // Comes from decoded token
@@ -149,6 +278,30 @@ app.get("/nextmatches", authenticateToken, async (req, res) => {
     console.error("Next matches error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
+});
+
+app.get("/leagues", authenticateToken, async (req, res) => {
+  try {
+    const username = req.user.username; // Comes from decoded token
+
+    const query = `SELECT leagues FROM users WHERE username = $1`;
+    const result = await pool.query(query, [username]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userLeagues = result.rows[0].leagues || [];
+
+    res.json(userLeagues); // returns a JSON array of leagues
+  } catch (err) {
+    console.error("Leagues fetch error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.get("/validate-token", authenticateToken, (req, res) => {
+  res.status(200).json({ valid: true, username: req.user.username });
 });
 
 // Register endpoint with leagues as text[]

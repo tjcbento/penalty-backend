@@ -11,7 +11,7 @@ RUN npm install --production
 # Copy app source code
 COPY . .
 
-# Create empty config folder
+# Create config folder
 RUN mkdir -p config
 
 # Expose port

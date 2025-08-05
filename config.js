@@ -60,6 +60,8 @@ const configs = {
     JWT_SECRET: process.env.JWT_SECRET_DEVELOPMENT,
     SECRET_MODE: process.env.SECRET_MODE_DEVELOPMENT,
 
+    TELEGRAM_BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,
+
     VITE_BACKEND_URL: process.env.VITE_BACKEND_URL_DEVELOPMENT,
   },
 };

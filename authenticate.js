@@ -19,8 +19,13 @@ export function authenticateToken(req, res, next) {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded; // Attach user info to request object
-    next(); // Pass control to the next handler
+    next(); // Continue to the next middleware/route
   } catch (err) {
     return res.status(401).json({ error: "Invalid token" });
   }
+}
+
+// Add utility to generate token
+export function generateToken(userPayload) {
+  return jwt.sign(userPayload, JWT_SECRET);
 }
