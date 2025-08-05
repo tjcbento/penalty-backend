@@ -1,0 +1,62 @@
+# Node modules (installed inside container)
+node_modules
+**/node_modules
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Env files (you might want to exclude local .env files to avoid leaking secrets)
+.env
+.env.local
+.env.*.local
+
+# Build output folders
+dist
+build
+.next
+.nuxt
+out
+
+# Cache folders
+.cache
+.parcel-cache
+.vite
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Coverage reports
+coverage
+*.lcov
+
+# Editor folders
+.vscode
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Docker files (optional)
+docker-compose.override.yml
+
+# Miscellaneous
+*.tgz
+*.zip
+
+# Optional: Ignore frontend public files if you COPY them separately
+# public
+
+# Optional: Ignore backend logs, pid files
+pids
+*.pid
+*.seed
+*.pid.lock
