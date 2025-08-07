@@ -291,7 +291,7 @@ app.get("/leagues", authenticateToken, async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const userLeagues = result.rows[0].leagues || [];
+    const userLeagues = result.rows[0].league || [];
 
     res.json(userLeagues); // returns a JSON array of leagues
   } catch (err) {
@@ -306,11 +306,11 @@ app.get("/validate-token", authenticateToken, (req, res) => {
 
 // Register endpoint with leagues as text[]
 app.post("/register", async (req, res) => {
-  const { username, name, leagues, password } = req.body;
+  const { username, name, league, password } = req.body;
   if (!username || !password || !name)
     return res.status(400).json({ error: "Missing required fields" });
 
-  const leaguesArray = leagues ? leagues.split(",").map((l) => l.trim()) : [];
+  const leaguesArray = league ? league.split(",").map((l) => l.trim()) : [];
 
   try {
     const password_hash = await bcrypt.hash(password, 10);

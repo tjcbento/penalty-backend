@@ -66,7 +66,7 @@ function prepareUpsert(fixture) {
   const home_team = fixture.teams.home.id;
   const away_team = fixture.teams.away.id;
   const result = getResult(fixture.goals.home, fixture.goals.away)
-  const status = fixture.status.short;
+  const status = fixture.fixture.status.short;
   const date = fixture.fixture.date;
 
   const sql = `
@@ -355,27 +355,23 @@ async function generateNotificationTokens() {
     const now = new Date();
     const currentHour = now.getHours();
 
-    // Optional time guard
-    // if (currentHour >= 12) return;
+    if (currentHour >= 12) return;
 
     await client.query(`TRUNCATE TABLE notification_tokens`);
 
     const today = new Date();
     const todayStr = today.toISOString().split("T")[0];
 
-    const in8Days = new Date(today);
-    in8Days.setDate(today.getDate() + 7);
-    const in8DaysStr = in8Days.toISOString().split("T")[0];
-
     const matchesRes = await client.query(
       `SELECT id_fixture, odds_1, odds_x, odds_2, date, home_team, away_team 
        FROM matches 
-       WHERE date::date BETWEEN $1 AND $2`,
-      [todayStr, in8DaysStr]
+       WHERE date::date = $1`,
+      [todayStr]
     );
+
     const matches = matchesRes.rows;
     if (matches.length === 0) {
-      console.log("No upcoming matches in next 8 days.");
+      console.log("No matches scheduled for today.");
       return;
     }
 
@@ -560,10 +556,10 @@ async function generateNotificationTokens() {
 
 async function main() {
   try {
-    //await updateMatches();
-    //await upsertTeams();
-    //await updateOdds();
-    //await populateFairplay();
+    await updateMatches();
+    await upsertTeams();
+    await updateOdds();
+    await populateFairplay();
     await buildScores(config.SECRET_MODE, config.SEASON);
     await generateNotificationTokens();
   } catch (err) {
