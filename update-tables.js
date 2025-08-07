@@ -1,6 +1,7 @@
 import fetch from "node-fetch";
 import { config } from "./config.js";
 import crypto from "crypto";
+import nodemailer from "nodemailer";
 
 const client = await config.pool.connect();
 
@@ -11,10 +12,36 @@ function getResult(homeGoals, awayGoals) {
   return "2";
 }
 
+async function sendEmail(toEmail, subject, htmlBody) {
+  try {
+    const transporter = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false, // use TLS
+      auth: {
+        user: config.FROM_EMAIL,
+        pass: config.EMAIL_PASSWORD,
+      },
+    });
+
+    const mailOptions = {
+      from: `"${config.EMAIL_FROM_NAME}" <${config.FROM_EMAIL}>`,
+      to: toEmail,
+      subject: subject,
+      html: htmlBody,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`Email sent to ${toEmail}`);
+  } catch (err) {
+    console.error(`Failed to send email to ${toEmail}:`, err);
+  }
+}
+
+
 async function sendTelegramMessage(telegramChatId, body) {
-  const url = `${config.TELEGRAM_API_URL || "https://api.telegram.org/bot"}${
-    config.TELEGRAM_BOT_TOKEN
-  }/sendMessage`;
+  const url = `${config.TELEGRAM_API_URL || "https://api.telegram.org/bot"}${config.TELEGRAM_BOT_TOKEN
+    }/sendMessage`;
 
   const params = new URLSearchParams({
     chat_id: telegramChatId,
@@ -38,8 +65,8 @@ function prepareUpsert(fixture) {
   const matchday = fixture.league.round.split(" - ")[1];
   const home_team = fixture.teams.home.id;
   const away_team = fixture.teams.away.id;
-  const result = "1"; // Placeholder
-  const status = "FT"; // Placeholder
+  const result = getResult(fixture.goals.home, fixture.goals.away)
+  const status = fixture.status.short;
   const date = fixture.fixture.date;
 
   const sql = `
@@ -201,7 +228,7 @@ async function buildScores(secretModeValue, seasonValue) {
     await client.query(`TRUNCATE TABLE scores`);
 
     const leaguesRes = await client.query(`
-      SELECT DISTINCT UNNEST(leagues) AS league FROM users
+      SELECT DISTINCT UNNEST(league) AS league FROM users
     `);
     const leagues = leaguesRes.rows.map((row) => row.league);
 
@@ -251,7 +278,7 @@ async function buildScores(secretModeValue, seasonValue) {
           AND matches.matchday < $1
           AND fairplay.league = $2
           AND matches.season = $4
-          AND $2 = ANY(users.leagues)
+          AND $2 = ANY(users.league)
         GROUP BY bets.username;
         `,
         [secretModeValue, league, bettingVolume, seasonValue]
@@ -267,7 +294,7 @@ async function populateFairplay() {
     await client.query(`TRUNCATE TABLE fairplay`);
 
     const leaguesRes = await client.query(`
-      SELECT DISTINCT UNNEST(leagues) AS league FROM users
+      SELECT DISTINCT UNNEST(league) AS league FROM users
     `);
     const leagues = leaguesRes.rows.map((row) => row.league);
 
@@ -275,7 +302,7 @@ async function populateFairplay() {
 
     for (const league of leagues) {
       const usersRes = await client.query(
-        `SELECT username FROM users WHERE $1 = ANY(leagues)`,
+        `SELECT username FROM users WHERE $1 = ANY(league)`,
         [league]
       );
       const usernames = usersRes.rows.map((row) => row.username);
@@ -328,10 +355,8 @@ async function generateNotificationTokens() {
     const now = new Date();
     const currentHour = now.getHours();
 
-    /*if (currentHour >= 12) {
-      console.log("Skipping notification token generation (after midday).");
-      return;
-    }*/
+    // Optional time guard
+    // if (currentHour >= 12) return;
 
     await client.query(`TRUNCATE TABLE notification_tokens`);
 
@@ -342,7 +367,6 @@ async function generateNotificationTokens() {
     in8Days.setDate(today.getDate() + 7);
     const in8DaysStr = in8Days.toISOString().split("T")[0];
 
-    // 1. Get all upcoming matches (next 8 days) with odds & teams
     const matchesRes = await client.query(
       `SELECT id_fixture, odds_1, odds_x, odds_2, date, home_team, away_team 
        FROM matches 
@@ -357,7 +381,6 @@ async function generateNotificationTokens() {
 
     const fixtureIds = matches.map((m) => m.id_fixture);
 
-    // Build match details map
     const matchDetailsMap = {};
     for (const m of matches) {
       matchDetailsMap[m.id_fixture] = {
@@ -370,10 +393,7 @@ async function generateNotificationTokens() {
       };
     }
 
-    // 2. Preload team names
-    const teamIds = Array.from(
-      new Set(matches.flatMap((m) => [m.home_team, m.away_team]))
-    );
+    const teamIds = Array.from(new Set(matches.flatMap((m) => [m.home_team, m.away_team])));
     const teamsRes = await client.query(
       `SELECT id, name FROM teams WHERE id = ANY($1)`,
       [teamIds]
@@ -382,11 +402,9 @@ async function generateNotificationTokens() {
       teamsRes.rows.map((row) => [row.id, row.name])
     );
 
-    // 3. Load users
     const usersRes = await client.query(`
       SELECT username, name, notification, telegram_id, email
       FROM users
-      WHERE notification != 'none'
     `);
     const users = usersRes.rows;
     if (users.length === 0) {
@@ -394,14 +412,12 @@ async function generateNotificationTokens() {
       return;
     }
 
-    // 4. Load bets for upcoming matches
     const betsRes = await client.query(
       `SELECT username, id_fixture, bet FROM bets WHERE id_fixture = ANY($1)`,
       [fixtureIds]
     );
     const betsToday = betsRes.rows;
 
-    // 5. Build and insert notification tokens
     const tokens = [];
     const insertParams = [];
     const insertPlaceholders = [];
@@ -439,8 +455,6 @@ async function generateNotificationTokens() {
     await client.query(insertQuery, insertParams);
     console.log(`Inserted ${tokens.length} notification tokens.`);
 
-    // 6. Build messages and send to Telegram
-    const VITE_BACKEND_URL = config.VITE_BACKEND_URL;
     const userGroups = {};
 
     for (const token of tokens) {
@@ -448,6 +462,8 @@ async function generateNotificationTokens() {
         userGroups[token.username] = {
           name: token.name,
           telegram_id: token.telegram_id,
+          email: token.email,
+          notification: token.notification, // ✅ FIXED HERE
           matches: {},
         };
       }
@@ -461,14 +477,16 @@ async function generateNotificationTokens() {
           },
         };
       }
-      userGroups[token.username].matches[token.id_fixture].bets[token.bet] =
-        token.token;
+      userGroups[token.username].matches[token.id_fixture].bets[token.bet] = token.token;
     }
 
     for (const [username, userData] of Object.entries(userGroups)) {
-      if (!userData.telegram_id) continue;
+      const notifications = userData.notification || [];
 
-      const { name, telegram_id, matches } = userData;
+      if (!notifications.length) continue;
+
+      const { name, telegram_id, email, matches } = userData;
+
       let message = `Olá ${name},\nEstas são as tuas apostas do dia:\n`;
 
       for (const [id_fixture, matchData] of Object.entries(matches)) {
@@ -487,33 +505,58 @@ async function generateNotificationTokens() {
         const line = ["1", "X", "2"].map((betKey) => {
           const oddsRaw = matchData.odds[betKey];
           const odds = typeof oddsRaw === "number" ? oddsRaw : Number(oddsRaw);
-          const oddsDisplay =
-            typeof odds === "number" && !isNaN(odds) ? odds.toFixed(2) : "???";
+          const oddsDisplay = typeof odds === "number" && !isNaN(odds) ? odds.toFixed(2) : "???";
 
           const token = matchData.bets[betKey];
           const url = `https://api.penalty.bet?token=${token}`;
 
           if (userBet === betKey) {
-            // brackets outside the link
             return `[<a href="${url}">${oddsDisplay}</a>]`;
           } else {
             return `<a href="${url}">${oddsDisplay}</a>`;
           }
         });
 
-        message += `\n${homeTeam} - ${awayTeam} : ${time}\n|  ${line.join(
-          "  |  "
-        )}  |\n`;
+        message += `\n${homeTeam} - ${awayTeam} : ${time}\n|  ${line.join("  |  ")}  |\n`;
       }
 
       message += `\nNão te esqueças que podes apostar ao carregar em cima dos links desta mensagem.\nBoa sorte!\nThe Penalty Team`;
 
-      await sendTelegramMessage(telegram_id, message);
+      if (notifications.includes("telegram") && telegram_id) {
+        await sendTelegramMessage(telegram_id, message);
+      }
+
+      if (notifications.includes("email") && email) {
+        const transporter = nodemailer.createTransport({
+          host: "smtp.gmail.com",
+          port: 587,
+          secure: false,
+          auth: {
+            user: config.FROM_EMAIL,
+            pass: config.EMAIL_PASSWORD,
+          },
+        });
+
+        const mailOptions = {
+          from: `"${config.EMAIL_FROM_NAME}" <${config.FROM_EMAIL}>`,
+          to: email,
+          subject: "Penalty - Apostas do dia",
+          html: message.replace(/\n/g, "<br>"),
+        };
+
+        try {
+          await transporter.sendMail(mailOptions);
+          console.log(`Email sent to ${email} (${username})`);
+        } catch (emailErr) {
+          console.error(`Failed to send email to ${email}:`, emailErr);
+        }
+      }
     }
   } catch (err) {
     console.error("Error generating notification tokens:", err);
   }
 }
+
 
 async function main() {
   try {
@@ -521,7 +564,7 @@ async function main() {
     //await upsertTeams();
     //await updateOdds();
     //await populateFairplay();
-    //await buildScores(config.SECRET_MODE, config.SEASON);
+    await buildScores(config.SECRET_MODE, config.SEASON);
     await generateNotificationTokens();
   } catch (err) {
     console.error("Error in main:", err);
