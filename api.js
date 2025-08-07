@@ -284,7 +284,7 @@ app.get("/leagues", authenticateToken, async (req, res) => {
   try {
     const username = req.user.username; // Comes from decoded token
 
-    const query = `SELECT leagues FROM users WHERE username = $1`;
+    const query = `SELECT league FROM users WHERE username = $1`;
     const result = await pool.query(query, [username]);
 
     if (result.rows.length === 0) {
@@ -317,11 +317,11 @@ app.post("/register", async (req, res) => {
 
     await pool.query(
       `
-      INSERT INTO users (username, name, leagues, password_hash)
+      INSERT INTO users (username, name, league, password_hash)
       VALUES ($1, $2, $3, $4)
       ON CONFLICT (username) DO UPDATE
       SET name = EXCLUDED.name,
-          leagues = EXCLUDED.leagues,
+          league = EXCLUDED.league,
           password_hash = EXCLUDED.password_hash
     `,
       [username, name, leaguesArray, password_hash]
