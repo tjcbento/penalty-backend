@@ -504,7 +504,7 @@ async function generateNotificationTokens() {
           const oddsDisplay = typeof odds === "number" && !isNaN(odds) ? odds.toFixed(2) : "???";
 
           const token = matchData.bets[betKey];
-          const url = `https://api.penalty.bet?token=${token}`;
+          const url = `https://api.penalty.bet/submitnotificationbet?token=${token}`;
 
           if (userBet === betKey) {
             return `[<a href="${url}">${oddsDisplay}</a>]`;
