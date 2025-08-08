@@ -47,7 +47,7 @@ app.post("/login", async (req, res) => {
 
 app.get("/scores", async (req, res) => {
   try {
-    const league = req.query.league || "global";
+    const league = req.query.league || "Global";
 
     const query = `
       SELECT 
@@ -279,6 +279,123 @@ app.get("/nextmatches", authenticateToken, async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+app.get("/summary", async (req, res) => {
+  const league = req.query.league;
+  if (!league) {
+    return res.status(400).json({ error: "Missing league query parameter" });
+  }
+
+  try {
+    const season = config.SEASON;
+    const now = new Date();
+
+    // 1. Get users in the league
+    const usersResult = await pool.query(
+      `SELECT username, name FROM users WHERE $1 = ANY(league)`,
+      [league]
+    );
+    if (usersResult.rows.length === 0) {
+      return res.status(404).json({ error: "No users found for this league" });
+    }
+    const users = usersResult.rows.map((u) => u.name);
+
+    // 2. Get all matchdays for the season
+    const matchdaysResult = await pool.query(
+      `SELECT DISTINCT matchday FROM matches WHERE season = $1 ORDER BY matchday ASC`,
+      [season]
+    );
+    const matchdays = matchdaysResult.rows.map((row) => row.matchday.toString());
+
+    // 3. Get all matches for the season, with team names and dates
+    const matchesResult = await pool.query(
+      `
+      SELECT
+        m.id_fixture AS id,
+        m.matchday::text,
+        ht.name AS home,
+        at.name AS away,
+        m.odds_1 AS "odds_1",
+        m.odds_x AS "odds_x",
+        m.odds_2 AS "odds_2",
+        COALESCE(m.result, '') AS result,
+        m.date
+      FROM matches m
+      JOIN teams ht ON m.home_team = ht.id
+      JOIN teams at ON m.away_team = at.id
+      WHERE m.season = $1
+      ORDER BY m.date ASC, m.id_fixture ASC
+      `,
+      [season]
+    );
+
+    const matches = matchesResult.rows.map((m) => ({
+      id: m.id,
+      matchday: m.matchday,
+      home: m.home,
+      away: m.away,
+      odds: {
+        "1": parseFloat(m.odds_1).toFixed(2),
+        "x": parseFloat(m.odds_x).toFixed(2),
+        "2": parseFloat(m.odds_2).toFixed(2),
+      },
+      result: m.result, // renamed field here
+      date: m.date,
+    }));
+
+    // 4. Determine currentMatchday: matchday of the next upcoming match (date > now)
+    const nextMatch = matches.find((m) => new Date(m.date) > now);
+    const currentMatchday = nextMatch ? nextMatch.matchday : matchdays[matchdays.length - 1] || "1";
+
+    // 5. Filter matches that have happened (date <= now) to include bets only for these matches
+    const finishedMatchIds = matches
+      .filter((m) => new Date(m.date) <= now)
+      .map((m) => m.id);
+
+    // 6. Get bets for users in the league but only for finished matches
+    const betsResult = await pool.query(
+      `
+      SELECT b.bet, b.username, b.id_fixture, u.name
+      FROM bets b
+      JOIN users u ON b.username = u.username
+      WHERE b.id_fixture = ANY($1) AND $2 = ANY(u.league)
+      `,
+      [finishedMatchIds, league]
+    );
+
+    // 7. Construct bets object per id_fixture with user bets
+    const bets = {};
+    const usersSet = new Set(users);
+
+    for (const matchId of finishedMatchIds) {
+      bets[matchId.toString()] = {};
+      for (const user of users) {
+        bets[matchId.toString()][user] = ""; // default empty string
+      }
+    }
+
+    for (const bet of betsResult.rows) {
+      const matchIdStr = bet.id_fixture.toString();
+      if (!(matchIdStr in bets)) continue;
+
+      bets[matchIdStr][bet.name] = bet.bet || "";
+    }
+
+    // Final JSON response
+    res.json({
+      currentMatchday,
+      users,
+      matchdays,
+      matches,
+      bets,
+    });
+  } catch (err) {
+    console.error("Summary endpoint error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
 
 app.get("/leagues", authenticateToken, async (req, res) => {
   try {
