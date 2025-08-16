@@ -38,10 +38,10 @@ async function sendEmail(toEmail, subject, htmlBody) {
   }
 }
 
-
 async function sendTelegramMessage(telegramChatId, body) {
-  const url = `${config.TELEGRAM_API_URL || "https://api.telegram.org/bot"}${config.TELEGRAM_BOT_TOKEN
-    }/sendMessage`;
+  const url = `${config.TELEGRAM_API_URL || "https://api.telegram.org/bot"}${
+    config.TELEGRAM_BOT_TOKEN
+  }/sendMessage`;
 
   const params = new URLSearchParams({
     chat_id: telegramChatId,
@@ -65,7 +65,7 @@ function prepareUpsert(fixture) {
   const matchday = fixture.league.round.split(" - ")[1];
   const home_team = fixture.teams.home.id;
   const away_team = fixture.teams.away.id;
-  const result = getResult(fixture.goals.home, fixture.goals.away)
+  const result = getResult(fixture.goals.home, fixture.goals.away);
   const status = fixture.fixture.status.short;
   const date = fixture.fixture.date;
 
@@ -124,70 +124,86 @@ async function updateMatches() {
 
 async function updateOdds() {
   try {
-    const url = `${config.API_URL}/odds?league=${config.LEAGUE_ID}&season=${config.SEASON}&bookmaker=8&bet=1`;
-    const response = await fetch(url, {
-      headers: { "X-APISPORTS-KEY": config.API_KEY },
-    });
+    const today = new Date();
 
-    if (!response.ok)
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
+    for (let i = 0; i < 10; i++) {
+      const date = new Date(today);
+      date.setDate(today.getDate() + i);
 
-    const data = await response.json();
-    if (!Array.isArray(data.response))
-      throw new Error("Invalid or missing response data");
+      // Format YYYY-MM-DD
+      const formattedDate = date.toISOString().split("T")[0];
 
-    for (const item of data.response) {
-      const fixtureId = item.fixture.id;
-      const values = item.bookmakers?.[0]?.bets?.[0]?.values;
+      const url = `${config.API_URL}/odds?date=${formattedDate}&bookmaker=8&bet=1`;
+      const response = await fetch(url, {
+        headers: { "X-APISPORTS-KEY": config.API_KEY },
+      });
 
-      if (!values || values.length !== 3) continue;
+      if (!response.ok)
+        throw new Error(
+          `API error (${formattedDate}): ${response.status} ${response.statusText}`
+        );
 
-      const oddsMap = {};
-      for (const val of values) {
-        if (val.value === "Home") oddsMap["odds_1"] = parseFloat(val.odd);
-        if (val.value === "Draw") oddsMap["odds_x"] = parseFloat(val.odd);
-        if (val.value === "Away") oddsMap["odds_2"] = parseFloat(val.odd);
+      const data = await response.json();
+      if (!Array.isArray(data.response)) {
+        console.warn(`No valid response for ${formattedDate}`);
+        continue;
       }
 
-      if (!oddsMap.odds_1 || !oddsMap.odds_x || !oddsMap.odds_2) continue;
+      for (const item of data.response) {
+        const fixtureId = item.fixture.id;
+        const values = item.bookmakers?.[0]?.bets?.[0]?.values;
 
-      const matchRes = await client.query(
-        `SELECT matchday FROM matches WHERE id_fixture = $1`,
-        [fixtureId]
-      );
+        if (!values || values.length !== 3) continue;
 
-      if (matchRes.rows.length === 0) continue;
+        const oddsMap = {};
+        for (const val of values) {
+          if (val.value === "Home") oddsMap["odds_1"] = parseFloat(val.odd);
+          if (val.value === "Draw") oddsMap["odds_x"] = parseFloat(val.odd);
+          if (val.value === "Away") oddsMap["odds_2"] = parseFloat(val.odd);
+        }
 
-      const matchday = matchRes.rows[0].matchday;
+        if (!oddsMap.odds_1 || !oddsMap.odds_x || !oddsMap.odds_2) continue;
 
-      const multiplierRes = await client.query(
-        `SELECT multiplier FROM multipliers WHERE matchday = $1`,
-        [matchday]
-      );
+        const matchRes = await client.query(
+          `SELECT matchday FROM matches WHERE id_fixture = $1`,
+          [fixtureId]
+        );
 
-      const multiplier = multiplierRes.rows[0]?.multiplier;
-      if (multiplier == null) continue;
+        if (matchRes.rows.length === 0) continue;
 
-      const adjustedOdds = {
-        odds_1: oddsMap.odds_1 * multiplier,
-        odds_x: oddsMap.odds_x * multiplier,
-        odds_2: oddsMap.odds_2 * multiplier,
-      };
+        const matchday = matchRes.rows[0].matchday;
 
-      await client.query(
-        `UPDATE matches 
-           SET odds_1 = $1, odds_x = $2, odds_2 = $3 
-           WHERE id_fixture = $4`,
-        [
-          adjustedOdds.odds_1,
-          adjustedOdds.odds_x,
-          adjustedOdds.odds_2,
-          fixtureId,
-        ]
+        const multiplierRes = await client.query(
+          `SELECT multiplier FROM multipliers WHERE matchday = $1`,
+          [matchday]
+        );
+
+        const multiplier = multiplierRes.rows[0]?.multiplier;
+        if (multiplier == null) continue;
+
+        const adjustedOdds = {
+          odds_1: oddsMap.odds_1 * multiplier,
+          odds_x: oddsMap.odds_x * multiplier,
+          odds_2: oddsMap.odds_2 * multiplier,
+        };
+
+        await client.query(
+          `UPDATE matches 
+             SET odds_1 = $1, odds_x = $2, odds_2 = $3 
+             WHERE id_fixture = $4`,
+          [
+            adjustedOdds.odds_1,
+            adjustedOdds.odds_x,
+            adjustedOdds.odds_2,
+            fixtureId,
+          ]
+        );
+      }
+
+      console.log(
+        `Updated odds for ${data.response.length} fixtures on ${formattedDate}.`
       );
     }
-
-    console.log(`Updated odds for ${data.response.length} fixtures.`);
   } catch (err) {
     console.error("Error updating odds:", err);
   }
@@ -389,7 +405,9 @@ async function generateNotificationTokens() {
       };
     }
 
-    const teamIds = Array.from(new Set(matches.flatMap((m) => [m.home_team, m.away_team])));
+    const teamIds = Array.from(
+      new Set(matches.flatMap((m) => [m.home_team, m.away_team]))
+    );
     const teamsRes = await client.query(
       `SELECT id, name FROM teams WHERE id = ANY($1)`,
       [teamIds]
@@ -473,7 +491,8 @@ async function generateNotificationTokens() {
           },
         };
       }
-      userGroups[token.username].matches[token.id_fixture].bets[token.bet] = token.token;
+      userGroups[token.username].matches[token.id_fixture].bets[token.bet] =
+        token.token;
     }
 
     for (const [username, userData] of Object.entries(userGroups)) {
@@ -501,7 +520,8 @@ async function generateNotificationTokens() {
         const line = ["1", "X", "2"].map((betKey) => {
           const oddsRaw = matchData.odds[betKey];
           const odds = typeof oddsRaw === "number" ? oddsRaw : Number(oddsRaw);
-          const oddsDisplay = typeof odds === "number" && !isNaN(odds) ? odds.toFixed(2) : "???";
+          const oddsDisplay =
+            typeof odds === "number" && !isNaN(odds) ? odds.toFixed(2) : "???";
 
           const token = matchData.bets[betKey];
           const url = `https://api.penalty.bet/submitnotificationbet?token=${token}`;
@@ -513,7 +533,9 @@ async function generateNotificationTokens() {
           }
         });
 
-        message += `\n${homeTeam} - ${awayTeam} : ${time}\n|  ${line.join("  |  ")}  |\n`;
+        message += `\n${homeTeam} - ${awayTeam} : ${time}\n|  ${line.join(
+          "  |  "
+        )}  |\n`;
       }
 
       message += `\nNão te esqueças que podes apostar ao carregar em cima dos links desta mensagem.\nBoa sorte!\nThe Penalty Team`;
@@ -552,7 +574,6 @@ async function generateNotificationTokens() {
     console.error("Error generating notification tokens:", err);
   }
 }
-
 
 async function main() {
   try {
