@@ -133,7 +133,7 @@ async function updateOdds() {
       // Format YYYY-MM-DD
       const formattedDate = date.toISOString().split("T")[0];
 
-      const url = `${config.API_URL}/odds?date=${formattedDate}&bookmaker=8&bet=1`;
+      const url = `${config.API_URL}/odds?league=${config.LEAGUE_ID}&season=${config.SEASON}&bookmaker=8&bet=1&date=${formattedDate}`;
       const response = await fetch(url, {
         headers: { "X-APISPORTS-KEY": config.API_KEY },
       });
