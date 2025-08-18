@@ -12,32 +12,6 @@ function getResult(homeGoals, awayGoals) {
   return "2";
 }
 
-async function sendEmail(toEmail, subject, htmlBody) {
-  try {
-    const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false, // use TLS
-      auth: {
-        user: config.FROM_EMAIL,
-        pass: config.EMAIL_PASSWORD,
-      },
-    });
-
-    const mailOptions = {
-      from: `"${config.EMAIL_FROM_NAME}" <${config.FROM_EMAIL}>`,
-      to: toEmail,
-      subject: subject,
-      html: htmlBody,
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`Email sent to ${toEmail}`);
-  } catch (err) {
-    console.error(`Failed to send email to ${toEmail}:`, err);
-  }
-}
-
 async function sendTelegramMessage(telegramChatId, body) {
   const url = `${config.TELEGRAM_API_URL || "https://api.telegram.org/bot"}${
     config.TELEGRAM_BOT_TOKEN
@@ -59,64 +33,67 @@ async function sendTelegramMessage(telegramChatId, body) {
   }
 }
 
-function prepareUpsert(fixture) {
-  const id_fixture = fixture.fixture.id;
-  const season = fixture.league.season;
-  const matchday = fixture.league.round.split(" - ")[1];
-  const home_team = fixture.teams.home.id;
-  const away_team = fixture.teams.away.id;
-  const result = getResult(fixture.goals.home, fixture.goals.away);
-  const status = fixture.fixture.status.short;
-  const date = fixture.fixture.date;
-
-  const sql = `
-    INSERT INTO matches 
-      (id_fixture, season, matchday, home_team, away_team, result, status, date)
-    VALUES 
-      ($1, $2, $3, $4, $5, $6, $7, $8)
-    ON CONFLICT (id_fixture) DO UPDATE SET
-      season = EXCLUDED.season,
-      matchday = EXCLUDED.matchday,
-      home_team = EXCLUDED.home_team,
-      away_team = EXCLUDED.away_team,
-      result = EXCLUDED.result,
-      status = EXCLUDED.status,
-      date = EXCLUDED.date;
-  `;
-
-  const values = [
-    id_fixture,
-    season,
-    matchday,
-    home_team,
-    away_team,
-    result,
-    status,
-    date,
-  ];
-  return { sql, values };
-}
-
 async function updateMatches() {
   try {
-    const url = `${config.API_URL}/fixtures?league=${config.LEAGUE_ID}&season=${config.SEASON}`;
-    const response = await fetch(url, {
-      headers: { "X-APISPORTS-KEY": config.API_KEY },
-    });
+    const res = await client.query("SELECT id, season FROM championships");
 
-    if (!response.ok)
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
-    const data = await response.json();
-    if (!data.response) throw new Error("No response data found");
+    for (const championship of res.rows) {
+      const url = `${config.API_URL}/fixtures?league=${championship.id}&season=${championship.season}`;
+      const response = await fetch(url, {
+        headers: { "X-APISPORTS-KEY": config.API_KEY },
+      });
 
-    let insertedCount = 0;
-    for (const fixture of data.response) {
-      if (!fixture.league.round.includes(config.ROUNDS_IMPORT)) continue;
-      const { sql, values } = prepareUpsert(fixture);
-      await client.query(sql, values);
-      insertedCount++;
+      const data = await response.json();
+
+      const fixturesToInsert = data.response
+        .filter((fixture) => fixture.league.round.includes("Regular Season"))
+        .map((fixture) => [
+          fixture.fixture.id,
+          fixture.league.season,
+          fixture.league.round.split(" - ")[1],
+          fixture.teams.home.name,
+          fixture.teams.away.name,
+          getResult(fixture.goals.home, fixture.goals.away),
+          fixture.fixture.status.short,
+          fixture.fixture.date,
+          championship.id,
+        ]);
+
+      if (fixturesToInsert.length === 0) continue;
+
+      // Build batch insert query placeholders
+      const valuesPlaceholders = fixturesToInsert
+        .map(
+          (_, i) =>
+            `($${i * 9 + 1}, $${i * 9 + 2}, $${i * 9 + 3}, $${i * 9 + 4}, $${
+              i * 9 + 5
+            }, $${i * 9 + 6}, $${i * 9 + 7}, $${i * 9 + 8}, $${i * 9 + 9})`
+        )
+        .join(", ");
+
+      const flatValues = fixturesToInsert.flat();
+
+      const sql = `
+        INSERT INTO matches
+          (id_fixture, season, matchday, home_team, away_team, result, status, date, championship)
+        VALUES ${valuesPlaceholders}
+        ON CONFLICT (id_fixture) DO UPDATE SET
+          season = EXCLUDED.season,
+          matchday = EXCLUDED.matchday,
+          home_team = EXCLUDED.home_team,
+          away_team = EXCLUDED.away_team,
+          result = EXCLUDED.result,
+          status = EXCLUDED.status,
+          date = EXCLUDED.date,
+          championship = EXCLUDED.championship;
+      `;
+
+      await client.query(sql, flatValues);
+
+      console.log(
+        `Upserted ${fixturesToInsert.length} fixtures for league ${championship.id}, season ${championship.season}.`
+      );
     }
-    console.log(`Upserted ${insertedCount} regular season fixtures.`);
   } catch (err) {
     console.error("Error updating matches:", err);
   }
@@ -126,179 +103,225 @@ async function updateOdds() {
   try {
     const today = new Date();
 
-    for (let i = 0; i < 10; i++) {
-      const date = new Date(today);
-      date.setDate(today.getDate() + i);
+    const res = await client.query("SELECT id, season FROM championships");
 
-      // Format YYYY-MM-DD
-      const formattedDate = date.toISOString().split("T")[0];
+    for (const championship of res.rows) {
+      for (let i = 0; i < 3; i++) {
+        const date = new Date(today);
+        date.setDate(today.getDate() + i);
 
-      const url = `${config.API_URL}/odds?league=${config.LEAGUE_ID}&season=${config.SEASON}&bookmaker=8&bet=1&date=${formattedDate}`;
-      const response = await fetch(url, {
-        headers: { "X-APISPORTS-KEY": config.API_KEY },
-      });
+        // Format YYYY-MM-DD
+        const formattedDate = date.toISOString().split("T")[0];
 
-      if (!response.ok)
-        throw new Error(
-          `API error (${formattedDate}): ${response.status} ${response.statusText}`
-        );
+        const url = `${config.API_URL}/odds?league=${championship.id}&season=${championship.season}&bookmaker=8&bet=1&date=${formattedDate}`;
+        const response = await fetch(url, {
+          headers: { "X-APISPORTS-KEY": config.API_KEY },
+        });
 
-      const data = await response.json();
-      if (!Array.isArray(data.response)) {
-        console.warn(`No valid response for ${formattedDate}`);
-        continue;
-      }
+        if (!response.ok)
+          throw new Error(
+            `API error (${formattedDate}): ${response.status} ${response.statusText}`
+          );
 
-      for (const item of data.response) {
-        const fixtureId = item.fixture.id;
-        const values = item.bookmakers?.[0]?.bets?.[0]?.values;
-
-        if (!values || values.length !== 3) continue;
-
-        const oddsMap = {};
-        for (const val of values) {
-          if (val.value === "Home") oddsMap["odds_1"] = parseFloat(val.odd);
-          if (val.value === "Draw") oddsMap["odds_x"] = parseFloat(val.odd);
-          if (val.value === "Away") oddsMap["odds_2"] = parseFloat(val.odd);
+        const data = await response.json();
+        if (!Array.isArray(data.response)) {
+          console.warn(`No valid response for ${formattedDate}`);
+          continue;
         }
 
-        if (!oddsMap.odds_1 || !oddsMap.odds_x || !oddsMap.odds_2) continue;
+        for (const item of data.response) {
+          const fixtureId = item.fixture.id;
+          const values = item.bookmakers?.[0]?.bets?.[0]?.values;
 
-        const matchRes = await client.query(
-          `SELECT matchday FROM matches WHERE id_fixture = $1`,
-          [fixtureId]
-        );
+          if (!values || values.length !== 3) continue;
 
-        if (matchRes.rows.length === 0) continue;
+          const oddsMap = {};
+          for (const val of values) {
+            if (val.value === "Home") oddsMap["odds_1"] = parseFloat(val.odd);
+            if (val.value === "Draw") oddsMap["odds_x"] = parseFloat(val.odd);
+            if (val.value === "Away") oddsMap["odds_2"] = parseFloat(val.odd);
+          }
 
-        const matchday = matchRes.rows[0].matchday;
+          if (!oddsMap.odds_1 || !oddsMap.odds_x || !oddsMap.odds_2) continue;
 
-        const multiplierRes = await client.query(
-          `SELECT multiplier FROM multipliers WHERE matchday = $1`,
-          [matchday]
-        );
+          const rangeRes = await client.query(
+            `
+            SELECT 
+              MAX(matchday)/3 AS first_boundary, 
+              MAX(matchday)*2/3 AS second_boundary 
+            FROM public.matches 
+            WHERE championship = $1
+              AND season = $2
+            `,
+            [championship.id, championship.season]
+          );
 
-        const multiplier = multiplierRes.rows[0]?.multiplier;
-        if (multiplier == null) continue;
+          const { first_boundary, second_boundary } = rangeRes.rows[0];
 
-        const adjustedOdds = {
-          odds_1: oddsMap.odds_1 * multiplier,
-          odds_x: oddsMap.odds_x * multiplier,
-          odds_2: oddsMap.odds_2 * multiplier,
-        };
+          // Get the matchday for the specific fixture
+          const matchRes = await client.query(
+            `SELECT matchday FROM matches WHERE id_fixture = $1`,
+            [fixtureId]
+          );
 
-        await client.query(
-          `UPDATE matches 
+          const matchday = matchRes.rows[0]?.matchday;
+
+          let multiplier = 1.0;
+          if (matchday <= first_boundary) {
+            multiplier = 1.0;
+          } else if (matchday <= second_boundary) {
+            multiplier = 1.5;
+          } else {
+            multiplier = 2.0;
+          }
+
+          // Apply multiplier to odds
+          const adjustedOdds = {
+            odds_1: oddsMap.odds_1 * multiplier,
+            odds_x: oddsMap.odds_x * multiplier,
+            odds_2: oddsMap.odds_2 * multiplier,
+          };
+
+          await client.query(
+            `UPDATE matches 
              SET odds_1 = $1, odds_x = $2, odds_2 = $3 
              WHERE id_fixture = $4`,
-          [
-            adjustedOdds.odds_1,
-            adjustedOdds.odds_x,
-            adjustedOdds.odds_2,
-            fixtureId,
-          ]
+            [
+              adjustedOdds.odds_1,
+              adjustedOdds.odds_x,
+              adjustedOdds.odds_2,
+              fixtureId,
+            ]
+          );
+        }
+
+        console.log(
+          `Updated odds for ${data.response.length} fixtures on ${formattedDate}.`
         );
       }
-
-      console.log(
-        `Updated odds for ${data.response.length} fixtures on ${formattedDate}.`
-      );
     }
   } catch (err) {
     console.error("Error updating odds:", err);
   }
 }
 
-async function upsertTeams() {
+async function buildScores() {
   try {
-    const url = `${config.API_URL}/teams?league=${config.LEAGUE_ID}&season=${config.SEASON}`;
-    const response = await fetch(url, {
-      headers: { "X-APISPORTS-KEY": config.API_KEY },
-    });
-
-    if (!response.ok)
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
-    const data = await response.json();
-    if (!data.response) throw new Error("No response data found");
-
-    for (const item of data.response) {
-      const { id, name, logo } = item.team;
-
-      await client.query(
-        `INSERT INTO teams (id, name, logo) VALUES ($1, $2, $3)
-         ON CONFLICT (id) DO UPDATE
-         SET name = EXCLUDED.name,
-             logo = EXCLUDED.logo;`,
-        [id, name, logo]
-      );
-    }
-
-    console.log(`Upserted ${data.response.length} teams successfully.`);
-  } catch (error) {
-    console.error("Error upserting teams:", error);
-  }
-}
-
-async function buildScores(secretModeValue, seasonValue) {
-  try {
+    // 1️⃣ Truncate the leaderboard table first
     await client.query(`TRUNCATE TABLE scores`);
 
-    const leaguesRes = await client.query(`
-      SELECT DISTINCT UNNEST(league) AS league FROM users
-    `);
-    const leagues = leaguesRes.rows.map((row) => row.league);
+    // 2️⃣ Fetch all leagues along with their season
+    const leaguesRes = await client.query(
+      `
+      SELECT l.id_league, l.championship, c.season
+      FROM leagues l
+      JOIN championships c ON c.id = l.championship
+      `
+    );
 
-    for (const league of leagues) {
+    for (const league of leaguesRes.rows) {
+      const { id_league, championship, season } = league;
+
+      // 3️⃣ Fetch all users in this league
+      const usersRes = await client.query(
+        `
+        SELECT username
+        FROM users
+        WHERE $1 = ANY(league)
+        `,
+        [id_league]
+      );
+      const users = usersRes.rows;
+
+      // 4️⃣ Calculate total betting volume for this league and season (restricted to fairplay, with 0.9 cutoff)
       const volumeRes = await client.query(
         `
-        SELECT COALESCE(SUM(multipliers.multiplier), 0) AS volume
-        FROM fairplay
-        JOIN matches ON fairplay.id_fixture = matches.id_fixture
-        JOIN multipliers ON multipliers.matchday = matches.matchday
-        WHERE fairplay.league = $1
-          AND matches.status = 'FT'
-          AND matches.matchday < $2
-          AND matches.season = $3
-      `,
-        [league, secretModeValue, seasonValue]
-      );
-
-      const bettingVolume = Number(volumeRes.rows[0].volume);
-
-      await client.query(
-        `
-        INSERT INTO scores (username, league, score, correct_bets, final_balance)
-        SELECT 
-          bets.username,
-          $2 AS league,
-          SUM(
-            CASE matches.result
-              WHEN '1' THEN matches.odds_1
-              WHEN 'x' THEN matches.odds_x
-              WHEN '2' THEN matches.odds_2
-            END
-          ) AS score,
-          COUNT(*) AS correct_bets,
-          SUM(
-            CASE matches.result
-              WHEN '1' THEN matches.odds_1
-              WHEN 'x' THEN matches.odds_x
-              WHEN '2' THEN matches.odds_2
-            END
-          ) - $3 AS final_balance
-        FROM bets
-        JOIN matches ON bets.id_fixture = matches.id_fixture
-        JOIN fairplay ON fairplay.id_fixture = matches.id_fixture
-        JOIN users ON users.username = bets.username
-        WHERE bets.bet = matches.result
-          AND matches.matchday < $1
-          AND fairplay.league = $2
-          AND matches.season = $4
-          AND $2 = ANY(users.league)
-        GROUP BY bets.username;
+        WITH boundaries AS (
+          SELECT 
+            MAX(matchday) / 3 AS first_boundary,
+            MAX(matchday) * 2 / 3 AS second_boundary,
+            MAX(matchday) * 0.9 AS secret_mode
+          FROM matches m
+          JOIN fairplay f ON f.id_fixture = m.id_fixture
+          WHERE m.championship = $1 
+            AND m.season = $2
+            AND f.league = $3
+        )
+        SELECT COALESCE(SUM(
+          CASE 
+            WHEN m.matchday <= b.first_boundary THEN 1.0
+            WHEN m.matchday <= b.second_boundary THEN 1.5
+            ELSE 2.0
+          END
+        ), 0) AS total_volume
+        FROM matches m
+        JOIN fairplay f ON f.id_fixture = m.id_fixture
+        CROSS JOIN boundaries b
+        WHERE m.status = 'FT'
+          AND m.championship = $1
+          AND m.season = $2
+          AND f.league = $3
+          AND m.matchday < b.secret_mode
         `,
-        [secretModeValue, league, bettingVolume, seasonValue]
+        [championship, season, id_league]
       );
+      const totalVolume = volumeRes.rows[0].total_volume;
+
+      // 5️⃣ Calculate scores and correct bets for each user (restricted to fairplay, with 0.9 cutoff)
+      for (const user of users) {
+        const { username } = user;
+
+        const scoreRes = await client.query(
+          `
+          WITH boundaries AS (
+            SELECT MAX(matchday) * 0.9 AS secret_mode
+            FROM matches m
+            JOIN fairplay f ON f.id_fixture = m.id_fixture
+            WHERE m.championship = $2
+              AND m.season = $3
+              AND f.league = $4
+          )
+          SELECT 
+            COALESCE(SUM(
+              CASE
+                WHEN b.bet = m.result THEN 
+                  CASE m.result
+                    WHEN '1' THEN m.odds_1
+                    WHEN 'x' THEN m.odds_x
+                    WHEN '2' THEN m.odds_2
+                  END
+                ELSE 0
+              END
+            ), 0) AS score,
+            COALESCE(SUM(CASE WHEN b.bet = m.result THEN 1 ELSE 0 END), 0) AS correct_bets
+          FROM bets b
+          JOIN matches m ON b.id_fixture = m.id_fixture
+          JOIN fairplay f ON f.id_fixture = m.id_fixture
+          CROSS JOIN boundaries bnd
+          WHERE b.username = $1
+            AND m.status = 'FT'
+            AND m.championship = $2
+            AND m.season = $3
+            AND f.league = $4
+            AND m.matchday < bnd.secret_mode
+          `,
+          [username, championship, season, id_league]
+        );
+
+        const { score, correct_bets } = scoreRes.rows[0];
+        const final_balance = score - totalVolume;
+
+        // 6️⃣ Insert into scores table
+        await client.query(
+          `
+          INSERT INTO scores (username, league, score, correct_bets, final_balance)
+          VALUES ($1, $2, $3, $4, $5)
+          `,
+          [username, id_league, score, correct_bets, final_balance]
+        );
+      }
+
+      console.log(`Leaderboard updated for league: ${championship}`);
     }
   } catch (err) {
     console.error("Error building scores:", err);
@@ -309,40 +332,49 @@ async function populateFairplay() {
   try {
     await client.query(`TRUNCATE TABLE fairplay`);
 
-    const leaguesRes = await client.query(`
-      SELECT DISTINCT UNNEST(league) AS league FROM users
-    `);
-    const leagues = leaguesRes.rows.map((row) => row.league);
+    const leaguesRes = await client.query(
+      `
+      SELECT l.id_league, l.championship, c.season
+      FROM leagues l
+      JOIN championships c ON c.id = l.championship
+      `
+    );
 
     const rowsToInsert = [];
 
-    for (const league of leagues) {
+    for (const league of leaguesRes.rows) {
+      const { id_league, championship, season } = league;
+
+      // Get all users in this league
       const usersRes = await client.query(
         `SELECT username FROM users WHERE $1 = ANY(league)`,
-        [league]
+        [id_league]
       );
       const usernames = usersRes.rows.map((row) => row.username);
 
       if (usernames.length === 0) continue;
 
+      // Get matches where ALL users in this league have placed a bet
       const matchesRes = await client.query(
         `
         SELECT m.id_fixture
         FROM matches m
         JOIN bets b ON m.id_fixture = b.id_fixture
         WHERE m.season = $1
-          AND b.username = ANY($2)
+          AND m.championship = $2
+          AND b.username = ANY($3)
         GROUP BY m.id_fixture
-        HAVING COUNT(DISTINCT b.username) = $3
-      `,
-        [config.SEASON, usernames, usernames.length]
+        HAVING COUNT(DISTINCT b.username) = $4
+        `,
+        [season, championship, usernames, usernames.length]
       );
 
       for (const row of matchesRes.rows) {
-        rowsToInsert.push({ id_fixture: row.id_fixture, league });
+        rowsToInsert.push({ id_fixture: row.id_fixture, league: id_league });
       }
     }
 
+    // Insert into fairplay
     if (rowsToInsert.length > 0) {
       const values = [];
       const params = [];
@@ -577,12 +609,11 @@ async function generateNotificationTokens() {
 
 async function main() {
   try {
-    await updateMatches();
-    await upsertTeams();
-    await updateOdds();
+    //await updateMatches();
+    //await updateOdds();
     await populateFairplay();
-    await buildScores(config.SECRET_MODE, config.SEASON);
-    await generateNotificationTokens();
+    await buildScores();
+    //await generateNotificationTokens();
   } catch (err) {
     console.error("Error in main:", err);
   } finally {

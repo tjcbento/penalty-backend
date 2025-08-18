@@ -7,11 +7,8 @@ console.log("Starting up in %s mode", ENV);
 
 const configs = {
   production: {
-    API_URL: process.env.API_URL_PRODUCTION,
-    API_KEY: process.env.API_KEY_PRODUCTION,
-    LEAGUE_ID: process.env.LEAGUE_ID_PRODUCTION,
-    SEASON: process.env.SEASON_PRODUCTION,
-    ROUNDS_IMPORT: process.env.ROUNDS_IMPORT_PRODUCTION,
+    API_URL: process.env.API_FOOTBALL_URL_PRODUCTION,
+    API_KEY: process.env.API_FOOTBALL_KEY_PRODUCTION,
 
     PG_HOST: process.env.PG_HOST_PRODUCTION,
     PG_PORT: Number(process.env.PG_PORT_PRODUCTION),
@@ -20,24 +17,11 @@ const configs = {
     PG_DATABASE: process.env.PG_DATABASE_PRODUCTION,
 
     JWT_SECRET: process.env.JWT_SECRET_PRODUCTION,
-    SECRET_MODE: process.env.SECRET_MODE_PRODUCTION,
-
-    TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN_PRODUCTION,
-
-
-    VITE_BACKEND_URL: process.env.VITE_BACKEND_URL_PRODUCTION,
-
-    EMAIL_FROM_NAME: process.env.EMAIL_FROM_NAME_PRODUCTION,
-    FROM_EMAIL: process.env.FROM_EMAIL_PRODUCTION,
-    EMAIL_PASSWORD: process.env.EMAIL_PASSWORD_PRODUCTION,
   },
 
   staging: {
-    API_URL: process.env.API_URL_STAGING,
-    API_KEY: process.env.API_KEY_STAGING,
-    LEAGUE_ID: process.env.LEAGUE_ID_STAGING,
-    SEASON: process.env.SEASON_STAGING,
-    ROUNDS_IMPORT: process.env.ROUNDS_IMPORT_STAGING,
+    API_URL: process.env.API_FOOTBALL_URL_STAGING,
+    API_KEY: process.env.API_FOOTBALL_KEY_STAGING,
 
     PG_HOST: process.env.PG_HOST_STAGING,
     PG_PORT: Number(process.env.PG_PORT_STAGING),
@@ -45,25 +29,12 @@ const configs = {
     PG_PASSWORD: process.env.PG_PASSWORD_STAGING,
     PG_DATABASE: process.env.PG_DATABASE_STAGING,
 
-    TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN_STAGING,
-
-
     JWT_SECRET: process.env.JWT_SECRET_STAGING,
-    SECRET_MODE: process.env.SECRET_MODE_STAGING,
-
-    VITE_BACKEND_URL: process.env.VITE_BACKEND_URL_STAGING,
-
-    EMAIL_FROM_NAME: process.env.EMAIL_FROM_NAME_STAGING,
-    FROM_EMAIL: process.env.FROM_EMAIL_STAGING,
-    EMAIL_PASSWORD: process.env.EMAIL_PASSWORD_STAGING,
   },
 
   development: {
-    API_URL: process.env.API_URL_DEVELOPMENT,
-    API_KEY: process.env.API_KEY_DEVELOPMENT,
-    LEAGUE_ID: process.env.LEAGUE_ID_DEVELOPMENT,
-    SEASON: process.env.SEASON_DEVELOPMENT,
-    ROUNDS_IMPORT: process.env.ROUNDS_IMPORT_DEVELOPMENT,
+    API_URL: process.env.API_FOOTBALL_URL_DEVELOPMENT,
+    API_KEY: process.env.API_FOOTBALL_KEY_DEVELOPMENT,
 
     PG_HOST: process.env.PG_HOST_DEVELOPMENT,
     PG_PORT: Number(process.env.PG_PORT_DEVELOPMENT),
@@ -72,15 +43,6 @@ const configs = {
     PG_DATABASE: process.env.PG_DATABASE_DEVELOPMENT,
 
     JWT_SECRET: process.env.JWT_SECRET_DEVELOPMENT,
-    SECRET_MODE: process.env.SECRET_MODE_DEVELOPMENT,
-
-    TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN_DEVELOPMENT,
-
-    VITE_BACKEND_URL: process.env.VITE_BACKEND_URL_DEVELOPMENT,
-
-    EMAIL_FROM_NAME: process.env.EMAIL_FROM_NAME_DEVELOPMENT,
-    FROM_EMAIL: process.env.FROM_EMAIL_DEVELOPMENT,
-    EMAIL_PASSWORD: process.env.EMAIL_PASSWORD_DEVELOPMENT,
   },
 };
 
